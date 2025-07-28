@@ -24,18 +24,7 @@ jobs:
       run: |
         pip install -r requirements.txt
 
-    # 4) --- BLOQUE DE PRUEBA: Ping rápido a Telegram ---
-    - name: Quick Telegram ping (debug)
-      env:
-        TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-        CHAT:  ${{ secrets.TELEGRAM_CHAT_ID }}
-      run: |
-        curl -s -X POST \
-          "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-          -d "chat_id=${CHAT}" \
-          -d "text=✅ Ping desde GitHub Actions OK"
-
-    # 5) Ejecuta tu bot real
+    # 4) Ejecuta tu bot real
     - name: Run Cardona bot
       env:
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
