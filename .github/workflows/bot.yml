@@ -1,33 +1,212 @@
-name: Cardona Bot
+# cardona_telegram_bot.py – versión «4 Estrategias»
+"""
+Telegram bot que envía señales de *todas* las estrategias de Alejandro Cardona :
 
-on:
-  # ejecuta a diario 10 :05 ET (14:05 UTC) de lunes a viernes
-  schedule:
-    - cron: '5 14 * * 1-5'
-  workflow_dispatch:   # permite lanzarlo a mano desde Actions
+ 1. Estrategia 1 – **Primera vela roja de apertura** (PUT)
+ 2. Estrategia 2 – **Ruptura del piso del gap** (PUT)
+ 3. Estrategia 3 – **Modelo de los 4 pasos** (PUT en canal bajista)
+ 4. Estrategia 4 – **Hangar en diario** (PUT)
 
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
+🟢 *Copiar / pegar* → no requiere más ficheros.
 
-    steps:
-    # 1) Baja tu repositorio
-    - uses: actions/checkout@v4
+Stack 100 % gratuito
+--------------------
+* **GitHub Actions** · Cron en UTC (programa en .github/workflows/bot.yml)
+* **python‑telegram‑bot** · API
+* **yfinance** (datos 1 min + 1 día)
+* **mplfinance** · Gráficos PNG
 
-    # 2) Python
-    - uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+Secrets GitHub Actions
+----------------------
+```
+TELEGRAM_TOKEN   # token que te dio @BotFather
+TELEGRAM_CHAT_ID # id del chat / canal
+```
+Run local » `python cardona_telegram_bot.py`
 
-    # 3) Instala dependencias
-    - name: Install deps
-      run: |
-        pip install -r requirements.txt
+"""
+from __future__ import annotations
 
-    # 4) Ejecuta tu bot real
-    - name: Run Cardona bot
-      env:
-        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      run: |
-        python cardona_telegram_bot.py
+import io, os, sys, datetime as dt
+from dataclasses import dataclass
+from typing import List, Literal
+
+import pytz, pandas as pd, yfinance as yf, mplfinance as mpf
+from telegram import Bot
+
+# ────────────────────────────────────────────  CONFIG  ────────────────────────
+
+ASSETS = {
+    "SPY":  (0.25, 0.30, 10),
+    "QQQ":  (0.25, 0.30, 10),
+    "META": (0.45, 0.80, 25),
+    "AAPL": (0.45, 0.80, 4),
+    "AMZN": (0.60, 0.80, 8),
+    "NFLX": (1.50, 2.50, 15),
+    "MRNA": (1.00, 2.00, 15),
+    "TSLA": (2.50, 3.00, 10),
+    "TNA":  (0.60, 0.80, 13),
+    "GLD":  (0.60, 0.80, 4),
+    "SLV":  (0.10, 0.20, 2),
+    "USO":  (0.10, 0.20, 3),
+    "BAC":  (0.10, 0.20, 2),
+    "CVX":  (0.60, 0.80, 5),
+    "XOM":  (0.60, 0.80, 5),
+    "NVDA": (0.60, 0.80, 9),
+}
+
+VOLUME_MIN = {
+    "SPY": 20_000_000, "QQQ": 20_000_000, "META": 3_000_000,
+    "AAPL": 20_000_000, "AMZN": 16_000_000, "NFLX": 1_000_000,
+    "MRNA": 2_000_000,  "TSLA": 15_000_000, "TNA": 2_000_000,
+    "GLD": 2_000_000,   "SLV": 10_000_000, "USO": 1_000_000,
+    "BAC": 10_000_000,  "CVX": 2_000_000,  "XOM": 4_000_000,
+    "NVDA": 120_000_000,
+}
+
+ET = pytz.timezone("US/Eastern")
+
+# ────────────────────────────────────────  DATACLASS  ─────────────────────────
+
+Strategy = Literal["E1", "E2", "E3", "E4"]
+
+@dataclass
+class Signal:
+    symbol: str
+    strategy: Strategy
+    timestamp: dt.datetime  # hora ET relevante
+    spot: float
+    strike: float
+    opt_range: tuple[float, float]
+    chart_png: bytes
+
+# ────────────────────────────────────────  HELPERS  ───────────────────────────
+
+def fetch_intraday(symbol: str, day: dt.date) -> pd.DataFrame:
+    """1‑min desde 09:25 ET hasta 16:05 ET (para todas las estrategias intra‐día)."""
+    start = ET.localize(dt.datetime.combine(day, dt.time(9, 25)))
+    end   = ET.localize(dt.datetime.combine(day, dt.time(16, 5)))
+    df = yf.download(symbol, interval="1m", start=start, end=end, progress=False, threads=False)
+    if df.empty:
+        raise ValueError("No data")
+    df.index = df.index.tz_convert(ET)
+    return df
+
+# ────────────────────────────  Estrategia 1 – Primera roja  ──────────────────
+
+def strat1_signal(df: pd.DataFrame) -> bool:
+    first5 = df.between_time("09:30", "09:34")
+    ten    = df.at_time("10:00")
+    return (
+        not first5.empty and not ten.empty and
+        first5.iloc[-1].Close < first5.iloc[0].Open and  # 1ª vela roja
+        ten.iloc[0].Close < ten.iloc[0].Open             # vela 10:00 roja
+    )
+
+# ────────────────────────────  Estrategia 2 – Piso del gap  ───────────────────
+
+def strat2_signal(df: pd.DataFrame) -> bool:
+    """Gap bajista ≥0.3 % y ruptura del mínimo del gap después de 11:00."""
+    open_price = df.at_time("09:30").iloc[0].Open
+    prev_close = df.iloc[0].Open  # 09:25 vela proxy día anterior
+    gap_pct = (open_price - prev_close) / prev_close
+    if gap_pct > -0.003:  # no es gap bajista relevante
+        return False
+    min_gap = df.between_time("09:30", "09:59").Low.min()
+    post11 = df.between_time("11:00", "11:59")
+    return not post11.empty and (post11.Low < min_gap).any()
+
+# ────────────────────────  Estrategia 3 – Modelo 4 pasos  ─────────────────────
+
+def strat3_signal(df: pd.DataFrame) -> bool:
+    """Canal bajista simplificado: 20 MA < 40 MA y ruptura de piso intradía >=11:00."""
+    ma20 = df.Close.rolling(20).mean()
+    ma40 = df.Close.rolling(40).mean()
+    if ma20.iloc[-1] >= ma40.iloc[-1]:
+        return False  # no hay tendencia bajista
+    # paso 2: zona cara ≈ máximo intradía hasta 10:30
+    high_morning = df.between_time("09:30", "10:29").High.max()
+    # piso que seguiremos: mínimos crecientes hasta 11 h
+    floor = df.between_time("09:30", "10:59").Low.cummax()
+    after11 = df.at_time("11:00")
+    return (df.iloc[-1].Low < floor.iloc[-1]) and (df.iloc[-1].High >= high_morning)
+
+# ─────────────────────────  Estrategia 4 – Hangar diario  ─────────────────────
+
+def fetch_daily(symbol: str, day: dt.date) -> pd.DataFrame:
+    start = day - dt.timedelta(days=5)
+    return yf.download(symbol, start=start, end=day + dt.timedelta(days=1), progress=False, threads=False)
+
+def strat4_signal(symbol: str, day: dt.date) -> bool:
+    daily = fetch_daily(symbol, day)
+    if daily.empty or len(daily) < 2:
+        return False
+    today = daily.iloc[-1]
+    body = abs(today.Open - today.Close)
+    upper_shadow = today.High - max(today.Open, today.Close)
+    if upper_shadow < 2 * body:
+        return False  # no cuelga suficiente
+    # 20 < 40 diario = canal bajista
+    ma20 = daily.Close.rolling(20).mean().iloc[-1]
+    ma40 = daily.Close.rolling(40).mean().iloc[-1]
+    return ma20 < ma40
+
+# ─────────────────────────  CHART  &  MESSAGE  ───────────────────────────────
+
+def make_chart(df: pd.DataFrame, symbol: str, strategy: Strategy) -> bytes:
+    mc = mpf.make_marketcolors(up="#26a69a", down="#ef5350", inherit=True)
+    s  = mpf.make_mpf_style(marketcolors=mc)
+    buf = io.BytesIO()
+    mpf.plot(df,
+             type="candle", style=s,
+             title=f"{symbol} – {strategy} (09:30‑16:00)",
+             ylabel="Price ($)", datetime_format="%H:%M", xrotation=15,
+             savefig=dict(fname=buf, format="png"))
+    buf.seek(0)
+    return buf.read()
+
+STRAT_NAME = {
+    "E1": "Primera vela roja de apertura",
+    "E2": "Ruptura del piso del gap",
+    "E3": "Modelo de los 4 pasos",
+    "E4": "Hangar en diario",
+}
+
+def build_message(sig: Signal) -> str:
+    mn, mx = sig.opt_range
+    ts = sig.timestamp.astimezone(ET).strftime("%H:%M")
+    return (
+        f"🚨 *Señal {sig.strategy} – {STRAT_NAME[sig.strategy]}*\n\n"
+        f"*Activo:* `{sig.symbol}`\n"
+        f"*Hora:* {ts} ET\n"
+        f"*Spot:* ${sig.spot:.2f}  →  *Strike:* {sig.strike}\n"
+        f"*Precio contrato:* ${mn:.2f} – ${mx:.2f}\n"
+        f"#CardonaBot #{sig.strategy}")
+
+# ─────────────────────────────  SCAN A SYMBOL  ───────────────────────────────
+
+def scan_symbol(symbol: str, day: dt.date) -> List[Signal]:
+    sigs: List[Signal] = []
+    try:
+        df = fetch_intraday(symbol, day)
+    except ValueError:
+        return sigs
+    # vol filtro
+    if df.Volume.sum() < VOLUME_MIN.get(symbol, 0):
+        return sigs
+
+    spot = df.iloc[-1].Close
+    strike = round(spot - ASSETS[symbol][2], 0)
+    opt_range = ASSETS[symbol][:2]
+
+    def add(strategy: Strategy, ts: dt.datetime):
+        sigs.append(Signal(symbol, strategy, ts, spot, strike, opt_range,
+                           make_chart(df.between_time("09:30", "10:05"), symbol, strategy)))
+
+    if strat1_signal(df):
+        add("E1", df.at_time("10:00").index[0])
+    if strat2_signal(df):
+        add("E2", df.at_time("11:00").index[0])
+    if strat3_signal(df):
+        add("E3", df.index[-1])
+    if strat4
