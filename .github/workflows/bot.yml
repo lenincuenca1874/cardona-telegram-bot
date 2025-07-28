@@ -42,3 +42,15 @@ jobs:
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
         python cardona_telegram_bot.py
+
+- name: Quick Telegram ping (debug)
+  env:
+    TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+    CHAT:  ${{ secrets.TELEGRAM_CHAT_ID }}
+  run: |
+    echo "TOKEN (4 first chars) = ${TOKEN:0:4}"
+    echo "CHAT  = ${CHAT}"
+    curl -sS -X POST \
+      "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+      -d chat_id="${CHAT}" \
+      -d text="✅ Ping desde GitHub Actions OK"
