@@ -42,7 +42,6 @@ jobs:
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
         python cardona_telegram_bot.py
-
 - name: Quick Telegram ping (debug)
   env:
     TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
