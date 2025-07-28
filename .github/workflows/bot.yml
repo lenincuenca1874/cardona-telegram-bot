@@ -1,29 +1,29 @@
 name: Cardona Bot
+
 on:
-  workflow_dispatch:
-  schedule:
-    # 10:05 ET   = 14:05 UTC
+  schedule:       # 10:05 ET → 14:05 UTC de lunes a viernes
     - cron: '5 14 * * 1-5'
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
 
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt          # ← usa el archivo nuevo
+    - name: Install deps
+      run: |
+        pip install -r requirements.txt
 
-      - name: Run bot
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python cardona_telegram_bot.py
+    - name: Run Cardona bot
+      env:
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        python cardona_telegram_bot.py
