@@ -1,0 +1,21 @@
+name: Cardona Bot – Intradía
+on:
+  schedule:
+    # Rango horario NY 09:30‑16:00 => UTC 13:30‑20:00 / 14:30‑21:00
+    - cron: "*/2 13-20 * * 1-5"
+    - cron: "*/2 14-21 * * 1-5"
+  workflow_dispatch:
+jobs:
+  realtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - run: pip install --upgrade pip yfinance pandas requests
+      - name: Alertas intradía
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python cardona_bot.py
