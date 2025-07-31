@@ -1,21 +1,35 @@
-name: Cardona Bot – Intradía
+# .github/workflows/cardona_realtime.yml
+name: Cardona – Intradía
+
 on:
-  schedule:
-    # Rango horario NY 09:30‑16:00 => UTC 13:30‑20:00 / 14:30‑21:00
-    - cron: "*/2 13-20 * * 1-5"
-    - cron: "*/2 14-21 * * 1-5"
-  workflow_dispatch:
+  schedule:            # cada 2 min de 09 :30-16 :00 NY (13 :30-20 :00 UTC)
+    - cron: '*/2 13-20 * * 1-5'
+  workflow_dispatch:   # permite lanzarlo a mano
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   realtime:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
-      - run: pip install --upgrade pip yfinance pandas requests
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance mplfinance pandas requests python-telegram-bot
+
       - name: Alertas intradía
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python cardona_bot.py
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python cardona_telegram_bot.py
