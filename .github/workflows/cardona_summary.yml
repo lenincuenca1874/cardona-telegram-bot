@@ -1,20 +1,93 @@
-name: Cardona Bot – Resumen diario
-on:
-  schedule:
-    # 20:10 UTC == 16:10 NY (cierre)
-    - cron: "10 20 * * 1-5"
-  workflow_dispatch:
-jobs:
-  summary:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
-      - run: pip install --upgrade pip yfinance pandas requests
-      - name: Enviar resumen único
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python cardona_summary.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Envía UN resumen diario al canal de Telegram:
+• Lista de símbolos con señales encontradas (todas las estrategias)
+• Si no hay ninguna → mensaje “sin señales válidas”
+"""
+
+import os, datetime, requests, pandas as pd, telegram
+
+# ──────────────────────────── CONFIGURACIÓN ────────────────────────────
+TOKEN   = os.environ["TELEGRAM_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+
+SYMBOLS = [
+    "SPY","QQQ","AAPL","META","AMZN","NFLX","TSLA","NVDA",
+    "MRNA","BAC","TNA","GLD","SLV","USO","XOM","CVX"
+]
+TIMEZONE = "America/New_York"          # para estampar la hora en NY
+
+# ────────────────────────────── UTILIDADES ─────────────────────────────
+def yf_1d(sym: str) -> pd.DataFrame:
+    """
+    Devuelve un DataFrame con datos de 1-día (1 min) del símbolo `sym`.
+    """
+    url = ("https://query1.finance.yahoo.com/v8/finance/chart/"
+           f"{sym}?interval=1m&range=1d")
+    j = requests.get(url, timeout=20).json()
+    ts  = j["chart"]["result"][0]["timestamp"]
+    px  = j["chart"]["result"][0]["indicators"]["quote"][0]
+    df  = pd.DataFrame(px, index=pd.to_datetime(ts, unit="s", utc=True))
+    df  = df.tz_convert(TIMEZONE)
+    return df
+
+# Estrategias ⟶ devuelven True/False (Serie booleana) + descripción breve
+def e1(df):  # Primera vela roja de apertura (PUT)
+    s = df["close"].between(df["open"], df["open"]*0.999)
+    return s & (df.index.hour == 10)  # ≈ vela 9:30-10
+
+def e2(df):  # Ruptura piso del gap (PUT)
+    gap_low = df["low"].iloc[0]
+    return df["close"] < gap_low
+
+def e3(df):  # Modelo 4 pasos (PUT, canal bajista)
+    ma40 = df["close"].rolling(40).mean()
+    top  = ma40 + ma40*0.01
+    return (df["high"] > top) & (df["close"] < top)
+
+def e4(df):  # Hángar en diario (PUT)
+    o, h, l, c = [df[x].iloc[-1] for x in ("open","high","low","close")]
+    body = abs(c-o)
+    upper = h - max(c,o)
+    return (upper > 2*body) and (c < o)       # cola alta + roja
+
+STRATS = [
+    (e1, "E1 ᴿᵒʲᵃ apertura (put)"),
+    (e2, "E2 🔻 Piso gap (put)"),
+    (e3, "E3 📉 4-pasos (put)"),
+    (e4, "E4 🪣 Hangar diario (put)")
+]
+
+# ───────────────────────────── FUNCIÓN MAIN ────────────────────────────
+def main() -> None:
+    hits = []
+
+    for t in SYMBOLS:
+        df = yf_1d(t)
+
+        for func, name in STRATS:
+            flag = func(df)
+
+            # flag puede ser bool o Serie → lo reducimos a bool
+            if isinstance(flag, pd.Series):
+                flag = bool(flag.iloc[-1])    # <-- CORRECCIÓN CLAVE
+
+            if flag:
+                hits.append(f"• {t}   {name}")
+
+    # Mensaje final
+    bot = telegram.Bot(TOKEN)
+    today = datetime.date.today().strftime("%Y-%m-%d")
+
+    if hits:
+        text = ("📋 *Resumen diario* " + today +
+                "\nSeñales encontradas:\n" + "\n".join(hits))
+    else:
+        text = f"📋 *{today}* – sin señales válidas hoy"
+
+    bot.send_message(CHAT_ID, text, parse_mode="Markdown")
+
+# ────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    main()
