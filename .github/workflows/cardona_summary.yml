@@ -1,10 +1,10 @@
 name: summary
 on:
-  schedule:                       # 21:10 UTC ≈ 17:10 NY (después del cierre)
-    - cron: "10 21 * * 1-5"
+  schedule:
+    - cron: "10 21 * * 1-5"       # 17:10 NY aprox.
   workflow_dispatch:
 jobs:
-  enviar-resumen:
+  diario:
     runs-on: ubuntu-latest
     env:
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
@@ -12,10 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
+        with: { python-version: "3.11" }
       - name: Install deps
-        run: |
-          pip install --upgrade pip yfinance pandas requests
-      - name: Enviar resumen único
+        run: pip install --upgrade pip yfinance pandas requests
+      - name: Run summary
         run: python cardona_summary.py
