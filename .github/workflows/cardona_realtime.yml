@@ -1,10 +1,10 @@
 name: realtime
 on:
-  schedule:                       # cada 5 min de 09:30 a 16:00 ET (13-20 UTC)
-    - cron: "*/5 13-20 * * 1-5"
-  workflow_dispatch:              # permite lanzarlo a mano
+  schedule:
+    - cron: "*/5 13-20 * * 1-5"   # cada 5 min mercado abierto (NY)
+  workflow_dispatch:
 jobs:
-  alertas-intradia:
+  intradia:
     runs-on: ubuntu-latest
     env:
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
@@ -12,10 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
+        with: { python-version: "3.11" }
       - name: Install deps
-        run: |
-          pip install --upgrade pip yfinance pandas requests
-      - name: Ejecutar alertas intradía
+        run: pip install --upgrade pip yfinance pandas requests
+      - name: Run bot
         run: python cardona_bot.py
