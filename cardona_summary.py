@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Resumen único diario al cierre con las señales detectadas
-(en timeframe 1 día) o mensaje de “sin señales válidas”.
+cardona_summary.py  –  Resumen diario con gráfico
+• Para cada símbolo que dispare señal:
+      • Mensaje de texto (estrategia, hora, spot, strike, rationale)
+      • Gráfico PNG adjunto
+• Si no hay señales → Mensaje “Sin señales válidas”
 """
 
-import os, datetime as dt, requests, pandas as pd, yfinance as yf
-from zoneinfo import ZoneInfo
+import os, datetime, tempfile, requests, pandas as pd, telegram
+import yfinance as yf
+import matplotlib
+matplotlib.use("Agg")                # backend sin interfaz gráfica
+import matplotlib.pyplot as plt
 
+# ─────────── Configuración básica ───────────
 TOKEN   = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
@@ -16,66 +23,111 @@ SYMBOLS = [
     "MRNA","BAC","TNA","GLD","SLV","USO","XOM","CVX"
 ]
 
-TZ = ZoneInfo("America/New_York")
+TIMEZONE = "America/New_York"
+TZ = datetime.timezone(datetime.timedelta(hours=-4), TIMEZONE)
 
-
-# ────────────── utilidades ──────────────
-def yf_daily(ticker: str) -> pd.DataFrame:
-    return yf.download(ticker, period="6mo", interval="1d", progress=False)
-
-def sma(s, n): return s.rolling(n).mean()
-
-def to_bool(obj) -> bool:
+# ─────────── Estrategias (ejemplo) ───────────
+def gap_ajista_alza(df: pd.DataFrame) -> bool:
     """
-    Convierte la ‘última fila’ a booleano evitando el ValueError
-    (“truth value of a Series is ambiguous”).
+    Gap alcista tras vela roja:
+      • La apertura (t) > máx (t-1)   AND
+      • El cierre (t-1) < apertura (t-1)  (vela roja previa)
     """
-    if isinstance(obj, pd.DataFrame):
-        return obj.iloc[-1].any()
-    return bool(obj.iloc[-1])
+    if len(df) < 2: return False
+    prev = df.iloc[-2]
+    curr = df.iloc[-1]
+    return (curr["Open"] > prev["High"]) and (prev["Close"] < prev["Open"])
 
-def send(msg: str):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT_ID,
-                             "text": msg,
-                             "parse_mode": "Markdown"},
-                  timeout=10)
+def strike_sugerido(spot: float, direction: str) -> float:
+    pct = 1.02 if direction == "CALL" else 0.98
+    return round(spot * pct, 2)
 
-# ─────────── estrategias diarias ───────────
-def e1(d):                              # Cierre cruza ↑ SMA20
-    s20 = sma(d.Close, 20)
-    return (d.Close > s20) & (d.Close.shift() <= s20.shift())
+# ─────────── Utilidades ───────────
+def yf_hourly(sym: str) -> pd.DataFrame:
+    return yf.download(sym, period="7d", interval="60m",
+                       auto_adjust=True, progress=False)
 
-def e2(d):                              # Cierre > SMA50 + volumen ↑
-    s50 = sma(d.Close, 50)
-    v20 = d.Volume.rolling(20).mean()
-    return (d.Close > s50) & (d.Volume > v20)
+def spot(sym: str) -> float:
+    return float(
+        yf.download(sym, period="1d", interval="1m",
+                    auto_adjust=True, progress=False)["Close"].iloc[-1])
 
-def e3(d):                              # Cierre < SMA20
-    s20 = sma(d.Close, 20)
-    return d.Close < s20
+def make_chart(sym: str, df: pd.DataFrame, signal_ts: pd.Timestamp) -> str:
+    """
+    Genera un PNG en /tmp y devuelve la ruta
+    """
+    # recortamos a los últimos 5 días para un gráfico compacto
+    df = df.tail(5*24)
+    fig, ax = plt.subplots(figsize=(10,4))
+    ax.plot(df.index, df["Close"], label="Close", lw=1.2)
+    # señal
+    ax.scatter(signal_ts, df["Close"].iloc[-1],
+               color="red", zorder=5, label="Señal")
+    ax.set_title(f"{sym} – Close 1 h")
+    ax.legend()
+    ax.grid(True, alpha=.3)
+    # formato fechas
+    fig.autofmt_xdate()
 
-def e4(d):                              # Inside-day
-    return (d.High < d.High.shift()) & (d.Low > d.Low.shift())
+    tmp_file = tempfile.NamedTemporaryFile(
+        suffix=f"_{sym}.png", delete=False)
+    fig.savefig(tmp_file.name, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    return tmp_file.name
 
-STRATS = {"E1": e1, "E2": e2, "E3": e3, "E4": e4}
-
-# ─────────── main ───────────
+# ─────────── Principal ───────────
 def main():
+    hoy = datetime.datetime.now(TZ).strftime("%Y-%m-%d")
+    bot = telegram.Bot(TOKEN)
+
     hits = []
     for sym in SYMBOLS:
-        df = yf_daily(sym)
-        if df.empty or len(df) < 60:
-            continue
-        for tag, fn in STRATS.items():
-            if to_bool(fn(df)):
-                hits.append(f"*{sym}*  → {tag}")
-                break
+        df = yf_hourly(sym)
+        if df.empty: continue
 
-    today = dt.datetime.now(TZ).strftime("%Y-%m-%d")
-    msg = (f"📊 *Resumen diario – {today}*\n" +
-           ("\n".join(hits) if hits else "_Sin señales válidas_"))
-    send(msg)
+        # Estrategia 1 (ejemplo)
+        if gap_ajista_alza(df):
+            ahora   = datetime.datetime.now(TZ).strftime("%H:%M")
+            ts_señal = df.index[-1]
+            precio  = spot(sym)
+            hits.append({
+                "sym": sym,
+                "hora": ahora,
+                "estrategia": "Gap alcista",
+                "dir": "CALL",
+                "spot": precio,
+                "strike": strike_sugerido(precio, "CALL"),
+                "rationale": (
+                    "Abrió por encima del máximo previo tras vela roja."
+                ),
+                "chart": make_chart(sym, df, ts_señal)
+            })
+
+        # ↳  Añade aquí tus otras 3 estrategias …
+
+    # ── Envío de mensajes ─────────────────────
+    if not hits:
+        bot.send_message(
+            chat_id=CHAT_ID,
+            text=f"📆 *{hoy}*\nSin señales válidas.",
+            parse_mode="Markdown")
+        return
+
+    for h in hits:
+        texto = "\n".join([
+            f"📆 *{hoy}*  —  `{h['hora']}`",
+            f"*{h['sym']}*  ({h['estrategia']})",
+            f"• Dirección: *{h['dir']}*",
+            f"• Spot: `{h['spot']:.2f}` | Strike: `{h['strike']}`",
+            f"• Por qué: _{h['rationale']}_"
+        ])
+        bot.send_message(chat_id=CHAT_ID,
+                         text=texto,
+                         parse_mode="Markdown")
+        # Enviamos gráfico
+        bot.send_photo(chat_id=CHAT_ID,
+                       photo=open(h["chart"], "rb"),
+                       caption=f"{h['sym']} – gráfico 1 h")
 
 if __name__ == "__main__":
     main()
