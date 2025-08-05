@@ -29,7 +29,7 @@ def plot_chart(df, symbol):
 
 def send_signal(tkr, strat, df):
     now = dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
-    msg = f"📈 *{tkr}* activó *{strat}*
+    msg = f"✅ *{tkr}* activó *{strat}*"
 Hora: {now}
 Análisis técnico automático:"
     bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
