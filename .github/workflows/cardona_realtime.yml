@@ -1,19 +1,85 @@
-name: realtime
-on:
-  schedule:
-    - cron: "*/5 13-20 * * 1-5"   # cada 5 min mercado abierto (NY)
-  workflow_dispatch:
-jobs:
-  intradia:
-    runs-on: ubuntu-latest
-    env:
-      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
-        with: { python-version: "3.11" }
-      - name: Install deps
-        run: pip install --upgrade pip yfinance pandas requests
-      - name: Run bot
-        run: python cardona_bot.py
+import os, io, datetime as dt, logging
+import pandas as pd, yfinance as yf, mplfinance as mpf
+from telegram import Bot
+
+TOKEN = os.environ['TELEGRAM_TOKEN'].strip()
+CHAT  = os.environ['TELEGRAM_CHAT_ID'].strip()
+bot   = Bot(token=TOKEN)
+
+TICKERS = [
+    "SPY","QQQ","META","AAPL","AMZN","NFLX","MRNA","TSLA",
+    "NVDA","TNA","GLD","SLV","USO","BAC","CVX","XOM"
+]
+
+# ------------ Estrategias ----------------------------------------------------
+def gap_bajista(df):
+    prev, cur = df.iloc[-2], df.iloc[-1]
+    return prev['Close'] > prev['Open'] and cur['Open'] < prev['Low']
+
+def gap_alcista(df):
+    prev, cur = df.iloc[-2], df.iloc[-1]
+    return prev['Close'] < prev['Open'] and cur['Open'] > prev['High']
+
+def ruptura_cañal(df):
+    # canal de 12 h simplificado: close cruza una SMA12
+    sma = df['Close'].rolling(12).mean()
+    return df['Close'].iloc[-2] < sma.iloc[-2] and df['Close'].iloc[-1] > sma.iloc[-1]
+
+def piso_techo_fuerte(df):
+    # modelo 4 pasos simplificado: 4 velas, out-of-the-money
+    last4 = df.tail(4)
+    return (last4['High'].idxmax() == last4.index[-1] and     # en techo
+            last4['Close'].iloc[-1] < last4['Open'].iloc[-1]) # vela roja
+
+STRATEGIES = {
+    "Gap Bajista": gap_bajista,
+    "Gap Alcista": gap_alcista,
+    "Ruptura Canal": ruptura_cañal,
+    "Piso-Techo Fuerte": piso_techo_fuerte
+}
+
+# ------------ Utilidades -----------------------------------------------------
+def fetch(tkr, days=5):
+    return yf.download(tkr, period=f"{days}d", interval="60m", progress=False)
+
+def send_chart(tkr, df, caption):
+    buf = io.BytesIO()
+    mpf.plot(df.tail(50), type='candle', style='yahoo',
+             mav=(20,40), volume=True, savefig=dict(fname=buf, dpi=120))
+    buf.seek(0)
+    bot.send_photo(CHAT, buf, caption=caption[:1024])
+
+def send_signal(tkr, strat, df):
+    now = dt.datetime.now(dt.timezone.utc).astimezone(
+        dt.timezone(dt.timedelta(hours=-4)))  # NY-4 en horario de verano
+    ts  = now.strftime('%Y-%m-%d %H:%M')
+    price = df['Close'].iloc[-1]
+    text  = (f"⚡️ *Señal {strat}*\n"
+             f"*{tkr}* @ {price:,.2f}  ({ts} NY)\n"
+             "_Premisa_: strike 1 sem fuera-del-dinero\n"
+             "_Acción_: esperar duplicar / TP parcial\n")
+    bot.send_message(CHAT, text, parse_mode='Markdown')
+    send_chart(tkr, df, f"{tkr} – {strat}")
+
+# ------------ Escaneo principal ---------------------------------------------
+def scan():
+    hits = []
+    for tkr in TICKERS:
+        try:
+            df = fetch(tkr)
+            if df.empty:                           # fallo descarga
+                continue
+            for name, fn in STRATEGIES.items():
+                if fn(df):
+                    send_signal(tkr, name, df)
+                    hits.append((tkr, name))
+        except Exception as e:
+            logging.error(f"{tkr} – {e}")
+
+    # ping mínimo para el workflow
+    if not hits:
+        bot.send_message(CHAT, "🔍 No hay señales válidas en esta pasada.")
+
+if __name__ == "__main__":
+    bot.send_message(CHAT, "♻️ CardonaBot realtime online (GitHub)")
+    scan()
