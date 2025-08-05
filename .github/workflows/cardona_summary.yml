@@ -1,19 +1,37 @@
-name: summary
-on:
-  schedule:
-    - cron: "10 21 * * 1-5"       # 17:10 NY aprox.
-  workflow_dispatch:
-jobs:
-  diario:
-    runs-on: ubuntu-latest
-    env:
-      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
-        with: { python-version: "3.11" }
-      - name: Install deps
-        run: pip install --upgrade pip yfinance pandas requests
-      - name: Run summary
-        run: python cardona_summary.py
+import os, datetime as dt, json
+from telegram import Bot
+
+TOKEN = os.environ['TELEGRAM_TOKEN'].strip()
+CHAT  = os.environ['TELEGRAM_CHAT_ID'].strip()
+bot   = Bot(token=TOKEN)
+
+# El workflow almacena hits del día en un artefacto JSON sencillo.
+LOGFILE = "signals_today.json"
+
+def load_hits():
+    if os.path.exists(LOGFILE):
+        with open(LOGFILE,'r') as f:
+            return json.load(f)
+    return []
+
+def clear_hits():
+    if os.path.exists(LOGFILE):
+        os.remove(LOGFILE)
+
+def main():
+    hits = load_hits()
+    today = dt.datetime.now().astimezone(
+        dt.timezone(dt.timedelta(hours=-4))).strftime('%Y-%m-%d')
+    if hits:
+        text = f"*Resumen Cardona {today}*\n\n"
+        for h in hits:
+            text += f"• {h['time']} NY – {h['tkr']} – {h['strat']}\n"
+    else:
+        text = f"*Resumen Cardona {today}*\n\nSin señales hoy."
+
+    bot.send_message(CHAT, text, parse_mode='Markdown')
+    clear_hits()
+
+if __name__ == "__main__":
+    main()
+
