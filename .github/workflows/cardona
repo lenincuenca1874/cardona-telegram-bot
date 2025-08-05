@@ -1,0 +1,42 @@
+name: CardonaBot
+
+on:
+  schedule:
+    # Gap Bajista
+    - cron: '31 14 * * 1-5'
+    - cron: '01 15 * * 1-5'
+    # Gap Alcista
+    - cron: '31 15 * * 1-5'
+    - cron: '01 16 * * 1-5'
+    # Ruptura Intradía canal
+    - cron: '01 17 * * 1-5'
+    - cron: '31 17 * * 1-5'
+    # Piso/Techo Fuerte (modelo 4 pasos)
+    - cron: '01 18 * * 1-5'
+    - cron: '31 18 * * 1-5'
+    # Barrido final antes de cerrar
+    - cron: '31 19 * * 1-5'
+    # Resumen diario 16 :05 NY
+    - cron: '5 20 * * 1-5'
+
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        script: [cardona_realtime.py, cardona_summary.py]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with: {python-version: '3.11'}
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run ${{ matrix.script }}
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python ${{ matrix.script }}
