@@ -1,8 +1,8 @@
 import os
 import requests
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TOKEN = os.getenv("8065055495:AAEhZ1X39y6M92-VzIqi4f2rkDlbH3SYWRE")
+CHAT_ID = os.getenv("7894610336")
 
 if not TOKEN or not CHAT_ID:
     raise Exception("TOKEN o CHAT_ID no configurados")
