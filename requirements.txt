@@ -1,6 +1,6 @@
-requests
-python-telegram-bot
+pandas
 yfinance
 matplotlib
-pandas
+python-telegram-bot
 pytz
+requests
