@@ -7,7 +7,8 @@ bot = Bot(token=TOKEN)
 
 def main():
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    resumen = f"📊 *Resumen del día - {now}*
+    resumen = f"📊 *Resumen del día - {now}*"
+
 
 "
     if not os.path.exists("signals_today.json"):
