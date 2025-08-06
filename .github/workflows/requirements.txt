@@ -1,6 +1,0 @@
-requests
-python-telegram-bot
-yfinance
-matplotlib
-pandas
-pytz
